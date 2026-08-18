@@ -1,0 +1,56 @@
+# Freya manipulator -- CubeMars AK actuators on the NUC's CANable adapter.
+#
+# CAN ids below were read off the live bus on 2026-08-18 (1 Mbit, can0):
+# three motors reporting status at 50 Hz as 0x296E / 0x296F / 0x2970,
+# i.e. 0x2900 | id  ->  ids 110, 111, 112.
+#
+# joint1 = id 110 and joint2 = id 111 were confirmed on the hardware by
+# stiffening each motor in turn and observing which physical joint locked.
+# joint3 = id 112 follows the same ordering but was not separately confirmed.
+#
+# NOTE: an earlier config in asgard-chassis declared four joints at ids
+# 104-107. Only three motors are present on this bus and none answer on
+# 104-107 -- do not copy those values back in.
+#
+# TODO(hardware): gear_ratio and position_feedback below are inherited from that
+# older config and are almost certainly wrong for these actuators.
+#   * AK60-39 has an OUTPUT-side encoder  -> position_feedback: "output", gear_ratio: 39
+#   * AK40-10 has NO output encoder       -> position_feedback: "rotor",  gear_ratio: 10
+# The values here say gear_ratio 8 for every joint, which matches neither part
+# number. gear_ratio also scales velocity and effort, so those are wrong by the
+# same factor until this is corrected per joint.
+
+/**:
+  ros__parameters:
+    can_interface: "can0"
+    update_rate: 100.0          # Hz, command + feedback loop
+    command_timeout_ms: 100.0   # motors are stopped if no command arrives within this
+
+    joints: ["joint1", "joint2", "joint3"]
+
+    joint1:
+      can_id: 110
+      kt: 0.199                 # Nm/A, motor torque constant
+      pole_pairs: 21
+      gear_ratio: 8
+      control_mode: "velocity"  # current | velocity | position | position_speed
+      max_acceleration: 20.0    # rad/s^2 at the output shaft, 0 disables ramping
+      position_feedback: "output"   # "output" for AK60-39, "rotor" for AK40-10
+
+    joint2:
+      can_id: 111
+      kt: 0.199
+      pole_pairs: 21
+      gear_ratio: 8
+      control_mode: "velocity"
+      max_acceleration: 20.0
+      position_feedback: "output"   # "output" for AK60-39, "rotor" for AK40-10
+
+    joint3:
+      can_id: 112
+      kt: 0.199
+      pole_pairs: 21
+      gear_ratio: 8
+      control_mode: "velocity"
+      max_acceleration: 20.0
+      position_feedback: "output"   # "output" for AK60-39, "rotor" for AK40-10
