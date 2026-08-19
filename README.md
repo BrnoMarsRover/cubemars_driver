@@ -142,6 +142,33 @@ at startup rather than silently corrupting control.
 `direction` and `enc_off` are independent and compose: `enc_off` moves the zero,
 `direction` chooses which way is positive from that zero.
 
+### Setting the zero reference
+
+`enc_off` is the raw angle at your chosen zero, subtracted *before* `direction`.
+[`tools/calibrate_zero.py`](tools/calibrate_zero.py) captures it from the live bus
+so you do not have to work it out by hand:
+
+```bash
+./tools/calibrate_zero.py --config /path/to/config.yaml \
+    --install-copy /path/to/install/share/<pkg>/config.yaml \
+    --service my_bringup.service
+```
+
+It reads the interface, joints and CAN ids out of the config itself, so it works
+for any robot using this driver. Position the joints where zero should be, press
+Enter, and it writes `enc_off` for each — replacing the existing value or adding
+one if the config has never been calibrated. Comments and layout are preserved,
+and it refuses to write at all unless every configured joint reported.
+
+`--service` stops the given unit first: a joint the driver is actively holding
+cannot be positioned by hand. `--install-copy` matters because colcon *copies*
+configs, so editing only the source has no effect until the next build.
+
+> [!NOTE]
+> An actuator with a single-turn output encoder loses its reference across a
+> power cycle, so `enc_off` captured now will be wrong after one. Re-run this
+> after power-up rather than trusting a value committed months ago.
+
 ### `position_feedback` — getting position into the right frame
 
 CubeMars actuators differ in where the position sensor sits, and the driver cannot
