@@ -51,17 +51,28 @@ candump -ta can0        # expect 0x29XX status frames, one burst per motor
 
 ```bash
 ros2 launch cubemars_driver cubemars.launch.py \
-    robot_name:=freya robot_number:=1 config:=manipulator.yaml
+    robot_name:=freya robot_number:=1 \
+    config:=$(ros2 pkg prefix --share my_pkg)/config/my_motors.yaml
 ```
+
+> [!IMPORTANT]
+> This package ships **no robot-specific config**. Which motors exist, their CAN
+> ids, gearing and direction belong to the package that owns the hardware — the
+> driver is agnostic of what it is driving. [`config/example.yaml`](config/example.yaml)
+> documents every parameter; copy it into your own package and edit it there.
+
+Equally, most integrations do not use this launch file at all — they declare the
+`Node` directly in their own bringup so they can set the namespace and remappings
+to suit. Both consumers on Freya do exactly that.
 
 ### Launch arguments
 
 | Argument       | Default            | Description                                        |
 | -------------- | ------------------ | -------------------------------------------------- |
 | `use_sim_time` | `False`            | Use simulation clock if true.                      |
-| `robot_name`   | —                  | Robot name (`freya`). Also picks `config/<robot_name>/`. |
+| `robot_name`   | —                  | Robot name (`freya`), used to build the namespace. |
 | `robot_number` | `''`               | Appended to the robot name (`freya_1`).            |
-| `config`       | `manipulator.yaml` | Parameter file inside `config/<robot_name>/`.      |
+| `config`       | — (required)       | **Absolute path** to the parameter file.           |
 | `state`        | `~/state`          | Output `JointState` topic.                         |
 | `command`      | `~/command`        | Input `JointState` topic.                          |
 
@@ -109,6 +120,27 @@ Per joint (nested under the joint name):
 | `max_acceleration` | double | `0.0`      | rad/s², velocity ramp limit. `0` disables ramping. |
 | `read_only`        | bool   | `false`    | Never transmit to this motor, only decode its feedback. |
 | `position_feedback`| string | `output`   | Where position is measured: `output` or `rotor`. See below. |
+| `direction`        | double | `1.0`      | `+1.0` or `-1.0` only. Flips this joint's axis. See below. |
+
+### `direction` — flipping a joint without rewiring it
+
+Mechanically mirrored joints (opposite sides of a chassis, a reversed linkage)
+turn the "wrong" way relative to the motor's own sense. `direction: -1.0` inverts
+that joint as ROS sees it:
+
+- **feedback** — position, velocity and effort are multiplied by it, applied last,
+  after all unit conversion and after `enc_off`
+- **commands** — velocity, position and effort targets are multiplied by the same
+  factor on the way in
+
+Because it is applied to both paths, the two remain exact inverses and closed-loop
+control is unaffected — but **only for ±1**. Feedback computes
+`rad = (raw − enc_off)·d` and a command computes `raw = rad·d + enc_off`, which
+round-trips solely because `1/d == d` when `d = ±1`. Any other value is rejected
+at startup rather than silently corrupting control.
+
+`direction` and `enc_off` are independent and compose: `enc_off` moves the zero,
+`direction` chooses which way is positive from that zero.
 
 ### `position_feedback` — getting position into the right frame
 

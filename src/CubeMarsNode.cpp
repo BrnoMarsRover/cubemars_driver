@@ -41,6 +41,7 @@ void CubeMarsNode::onInitialize() {
         declare_parameter<double>(name + "." + maxAcceleration, 0.0);
         declare_parameter<bool>(name + "." + readOnly, false);
         declare_parameter<std::string>(name + "." + positionFeedback, "output");
+        declare_parameter<double>(name + "." + direction, 1.0);
 
         CubeMarsCommon::MotorConfig cfg;
         cfg.name = name;
@@ -56,14 +57,17 @@ void CubeMarsNode::onInitialize() {
         cfg.readOnly = get_parameter(name + "." + readOnly).as_bool();
         cfg.positionFeedback = CubeMarsCommon::positionFeedbackFromString(
                 get_parameter(name + "." + positionFeedback).as_string());
+        cfg.direction = CubeMarsCommon::validateDirection(
+                get_parameter(name + "." + direction).as_double(), name);
 
         auto modeStr = get_parameter(name + "." + controlMode).as_string();
         cfg.controlMode = CubeMarsCommon::controlModeFromString(modeStr);
 
         motorConfigs.push_back(cfg);
-        RCLCPP_INFO(get_logger(), "Joint '%s': CAN ID %u, mode %s, kt %.4f, gear %d, position from %s",
+        RCLCPP_INFO(get_logger(),
+                    "Joint '%s': CAN ID %u, mode %s, kt %.4f, gear %d, position from %s, direction %+.0f",
                     name.c_str(), cfg.canId, modeStr.c_str(), cfg.kt, cfg.gearRatio,
-                    get_parameter(name + "." + positionFeedback).as_string().c_str());
+                    get_parameter(name + "." + positionFeedback).as_string().c_str(), cfg.direction);
     }
 
     // Create driver
@@ -84,11 +88,7 @@ void CubeMarsNode::onInitialize() {
 }
 
 void CubeMarsNode::commandCallback(const sensor_msgs::msg::JointState::SharedPtr msg) {
-    lastCommandTime_ = std::chrono::steady_clock::now();
-    if (commandTimedOut_) {
-        commandTimedOut_ = false;
-        RCLCPP_INFO(get_logger(), "Command input resumed");
-    }
+    bool matched = false;
 
     for (size_t m = 0; m < msg->name.size(); ++m) {
         for (size_t j = 0; j < driver_->motorCount(); ++j) {
@@ -97,15 +97,30 @@ void CubeMarsNode::commandCallback(const sensor_msgs::msg::JointState::SharedPtr
             auto mode = driver_->motorConfig(j).controlMode;
             if (mode == CubeMarsCommon::ControlMode::Speed && m < msg->velocity.size()) {
                 driver_->setVelocity(j, msg->velocity[m]);
+                matched = true;
             } else if ((mode == CubeMarsCommon::ControlMode::Position ||
                         mode == CubeMarsCommon::ControlMode::PositionSpeed) &&
                        m < msg->position.size()) {
                 driver_->setPosition(j, msg->position[m]);
+                matched = true;
             } else if (mode == CubeMarsCommon::ControlMode::Current && m < msg->effort.size()) {
                 driver_->setCurrent(j, msg->effort[m]);
+                matched = true;
             }
             break;
         }
+    }
+
+    // Only a message that actually addressed one of OUR joints, with the field
+    // its control mode needs, counts as command input. A JointState naming other
+    // joints must not keep this driver's watchdog alive -- otherwise unrelated
+    // traffic on a shared command topic silently disables the timeout.
+    if (!matched) return;
+
+    lastCommandTime_ = std::chrono::steady_clock::now();
+    if (commandTimedOut_) {
+        commandTimedOut_ = false;
+        RCLCPP_INFO(get_logger(), "Command input resumed");
     }
 }
 

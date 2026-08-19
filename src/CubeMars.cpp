@@ -105,9 +105,14 @@ void CubeMars::readFeedback() {
             auto spdInt = static_cast<int16_t>(data[2] << 8 | data[3]);
             auto curInt = static_cast<int16_t>(data[4] << 8 | data[5]);
 
-            st.position = posInt * 0.1 * M_PI / 180.0 * motor->positionScale - motor->config.encoderOffset;
-            st.velocity = spdInt * 10.0 / motor->erpmConversion;
-            st.effort = curInt * 0.01 * motor->config.kt * motor->config.gearRatio;
+            // `direction` is applied last, to the finished output-shaft quantities,
+            // so it flips the joint as ROS sees it without disturbing the unit
+            // conversions above. The command path applies the same factor, which is
+            // why direction is constrained to +-1 (see validateDirection).
+            st.position = (posInt * 0.1 * M_PI / 180.0 * motor->positionScale - motor->config.encoderOffset) *
+                          motor->config.direction;
+            st.velocity = (spdInt * 10.0 / motor->erpmConversion) * motor->config.direction;
+            st.effort = (curInt * 0.01 * motor->config.kt * motor->config.gearRatio) * motor->config.direction;
             st.temperature = static_cast<int8_t>(data[6]);
             st.fault = static_cast<CubeMarsCommon::Fault>(data[7]);
             break;
@@ -116,15 +121,15 @@ void CubeMars::readFeedback() {
 }
 
 void CubeMars::setVelocity(size_t motorIndex, double radPerSec) {
-    motors_.at(motorIndex)->targetVelocity = radPerSec;
+    motors_.at(motorIndex)->targetVelocity = radPerSec * motors_.at(motorIndex)->config.direction;
 }
 
 void CubeMars::setPosition(size_t motorIndex, double rad) {
-    motors_.at(motorIndex)->targetPosition = rad;
+    motors_.at(motorIndex)->targetPosition = rad * motors_.at(motorIndex)->config.direction;
 }
 
 void CubeMars::setCurrent(size_t motorIndex, double torqueNm) {
-    motors_.at(motorIndex)->targetEffort = torqueNm;
+    motors_.at(motorIndex)->targetEffort = torqueNm * motors_.at(motorIndex)->config.direction;
 }
 
 void CubeMars::stopAll() {

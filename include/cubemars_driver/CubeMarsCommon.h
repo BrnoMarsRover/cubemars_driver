@@ -2,6 +2,9 @@
 #define CUBEMARS_DRIVER_CUBEMARSCOMMON_H
 
 #include <cstdint>
+#include <iomanip>
+#include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -68,6 +71,27 @@ inline PositionFeedback positionFeedbackFromString(const std::string &src) {
     throw std::runtime_error("Unknown CubeMars position feedback source: " + src);
 }
 
+/// Validate a per-joint direction multiplier.
+///
+/// Must be exactly +1 or -1. The driver relies on the command path being the
+/// exact inverse of the feedback path: feedback computes
+/// `rad = (raw - encOff) * d` and a command computes `raw = rad * d + encOff`,
+/// which only round-trips because `1/d == d` for d = +-1. Any other value would
+/// scale the two paths differently and silently corrupt closed-loop control, so
+/// it is rejected at load time rather than trusted.
+inline double validateDirection(double direction, const std::string &jointName) {
+    if (direction != 1.0 && direction != -1.0) {
+        // Full precision deliberately: std::to_string rounds to 6 decimals, which
+        // would report a near-miss like 1.0000001 as "got 1.000000" and leave the
+        // reader unable to see what is wrong with their config.
+        std::ostringstream got;
+        got << std::setprecision(std::numeric_limits<double>::max_digits10) << direction;
+        throw std::runtime_error("CubeMars joint '" + jointName + "': direction must be 1.0 or -1.0, got " +
+                                 got.str());
+    }
+    return direction;
+}
+
 struct MotorConfig {
     std::string name;
     uint32_t canId = 0;
@@ -80,6 +104,10 @@ struct MotorConfig {
     int16_t posVelLimit = 0;
     int16_t posAccLimit = 0;
     bool readOnly = false;
+    /// Sign of this joint's axis relative to the motor's own. +1 or -1 only.
+    /// Applied symmetrically to feedback and to commands, so flipping it
+    /// reverses the joint as seen by ROS without touching the motor wiring.
+    double direction = 1.0;
     ControlMode controlMode = ControlMode::Speed;
     PositionFeedback positionFeedback = PositionFeedback::Output;
 };

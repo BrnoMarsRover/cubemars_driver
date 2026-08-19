@@ -1,0 +1,68 @@
+# Example cubemars_driver configuration.
+#
+# This file documents every parameter; it is NOT a working config for any real
+# robot. Real configs live with the package that uses the driver, not here --
+# the driver is agnostic of what it is driving, and this config is the only
+# thing that says which motors exist and how they behave.
+#
+# The `/**:` wildcard node key is deliberate: it makes the file apply whatever
+# namespace or node name the driver is launched under. A literal `cubemars_node:`
+# key silently matches NOTHING once the node runs inside a namespace, and the
+# driver then falls back to every default -- including `can_interface: can0`,
+# which on a multi-bus machine means binding the wrong bus.
+
+/**:
+  ros__parameters:
+    # ---- Global ----
+    can_interface: "can0"       # SocketCAN interface. The bus must already be up.
+    update_rate: 100.0          # Hz. Feedback read, command send and state publish.
+    command_timeout_ms: 100.0   # Stop all motors if no command arrives within this.
+                                # Keep it comfortably longer than the command
+                                # publisher's period, or the driver will brake
+                                # between every command.
+
+    # Every joint named here needs a matching block below.
+    joints: ["joint1", "joint2"]
+
+    joint1:
+      # ---- Required ----
+      can_id: 1                 # Motor CAN id. Status arrives on 0x2900 | can_id.
+      kt: 0.199                 # Torque constant, Nm/A, from the motor datasheet.
+      pole_pairs: 21            # Motor pole pairs, for the ERPM conversion.
+      gear_ratio: 8             # Reduction between motor and output shaft.
+                                # Scales velocity and effort as well as position --
+                                # a wrong value here is wrong everywhere.
+
+      # ---- Optional, shown at their defaults ----
+      control_mode: "velocity"  # current | velocity (= speed) | position | position_speed
+      enc_off: 0.0              # rad, subtracted from reported position. This is
+                                # where a homing/zeroing calibration lives.
+      direction: 1.0            # +1.0 or -1.0 ONLY. Flips this joint's axis as ROS
+                                # sees it, applied symmetrically to feedback and
+                                # commands, without rewiring the motor. Any other
+                                # value is rejected at startup, because the command
+                                # path is the inverse of the feedback path and that
+                                # only holds for +-1.
+      position_feedback: "output"  # "output": encoder is on the output shaft, the
+                                #   reported angle is already post-reduction (e.g.
+                                #   AK60-39). Typically single-turn and loses its
+                                #   reference on power cycle -- re-home after boot.
+                                # "rotor": no output encoder, the angle is measured
+                                #   before the reduction and is divided by gear_ratio
+                                #   (e.g. AK40-10).
+                                # Getting this wrong scales position by gear_ratio.
+      max_acceleration: 0.0     # rad/s^2 velocity ramp limit. 0 disables ramping.
+      trq_limit: 0.0            # Nm. Exceeding it stops ALL motors. 0 disables.
+      pos_vel_limit: 0          # Speed limit used only in position_speed mode.
+      pos_acc_limit: 0          # Acceleration limit used only in position_speed mode.
+      read_only: false          # true = never transmit to this motor, only decode
+                                # its feedback. Useful for observing a motor that
+                                # something else drives, and for safe diagnostics.
+
+    joint2:
+      can_id: 2
+      kt: 0.199
+      pole_pairs: 21
+      gear_ratio: 8
+      control_mode: "velocity"
+      direction: -1.0           # e.g. a mirrored joint on the opposite side

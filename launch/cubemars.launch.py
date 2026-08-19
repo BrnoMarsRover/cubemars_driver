@@ -26,10 +26,15 @@ def launch_setup(context: LaunchContext) -> Optional[List[LaunchDescriptionEntit
         if robot_number.perform(context) else [robot_name.perform(context)]
     indexed_robot_name = ''.join(indexed_robot_name)
 
-    # config/<robot_name>/<config>.yaml
-    config_file = os.path.join(
-        get_package_share_directory('cubemars_driver'),
-        'config', robot_name.perform(context), config.perform(context))
+    # Full path, supplied by the caller. The driver ships no robot-specific config
+    # of its own -- which motors exist and how they behave belongs to whatever
+    # package owns the hardware, not to the driver. `config/example.yaml` here
+    # documents the parameters but is not meant to be launched.
+    config_file = config.perform(context)
+    if not os.path.isfile(config_file):
+        raise RuntimeError(
+            f"cubemars_driver: config file not found: {config_file}\n"
+            "Pass an absolute path, e.g. config:=$(ros2 pkg prefix --share my_pkg)/config/my_motors.yaml")
 
     return [LaunchDescription([
         Node(
@@ -57,7 +62,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             name='robot_name',
-            description='Robot name (ex: "freya"). Also selects the config/<robot_name>/ folder.'
+            description='Robot name (ex: "freya"), used to build the node namespace.'
         ),
         DeclareLaunchArgument(
             name='robot_number',
@@ -66,8 +71,9 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             name='config',
-            default_value='manipulator.yaml',
-            description='Parameter file name inside config/<robot_name>/.'
+            description='ABSOLUTE path to the parameter file describing the motors. '
+                        'Owned by the package that owns the hardware, not by this driver. '
+                        'See config/example.yaml for the parameters.'
         ),
         DeclareLaunchArgument(
             name='state',
