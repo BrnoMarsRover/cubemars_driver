@@ -45,6 +45,10 @@ private:
     std::unique_ptr<CubeMars> driver_;
     double dt_ = 0.01;
     double commandTimeoutSec_ = 0.1;
+    std::string canInterface_;
+    /// Highest txDropped() already reported, so the warning fires on new drops
+    /// rather than once per cycle forever.
+    uint64_t txDroppedReported_ = 0;
 
     // Command timeout tracking
     std::chrono::time_point<std::chrono::steady_clock> lastCommandTime_;

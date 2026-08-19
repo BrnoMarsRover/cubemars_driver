@@ -71,6 +71,7 @@ void CubeMarsNode::onInitialize() {
     }
 
     // Create driver
+    canInterface_ = canItf;
     driver_ = std::make_unique<CubeMars>(canItf, motorConfigs);
     RCLCPP_INFO(get_logger(), "CAN communication active on '%s'", canItf.c_str());
 
@@ -155,6 +156,19 @@ void CubeMarsNode::updateTimerCallback() {
 
     // Send commands
     driver_->updateCommands(dt_);
+
+    // Transmit trouble is reported, not swallowed. Frames are dropped rather than
+    // blocking (see CubeMars::canWrite), so without this the node would keep
+    // publishing a perfectly healthy-looking state topic while nothing it sends
+    // ever reaches a motor.
+    const auto dropped = driver_->txDropped();
+    if (dropped > txDroppedReported_) {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+                             "CAN transmit failing on '%s': %lu frames dropped. The bus is not "
+                             "draining - is anything else on it powered?",
+                             canInterface_.c_str(), static_cast<unsigned long>(dropped));
+        txDroppedReported_ = dropped;
+    }
 
     // Publish state
     auto stateMsg = sensor_msgs::msg::JointState();

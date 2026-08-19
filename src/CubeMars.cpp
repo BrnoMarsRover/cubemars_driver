@@ -43,11 +43,14 @@ CubeMars::CubeMars(const std::string &canInterface,
     ::setsockopt(socket_, SOL_CAN_RAW, CAN_RAW_FILTER, filters.data(),
                  static_cast<socklen_t>(filters.size() * sizeof(struct can_filter)));
 
-    // Verify socket works with a test write
+    // Verify socket works with a test write. Non-blocking like every other send
+    // here; on a freshly opened socket the queue is empty, so this still fails
+    // only for a genuinely unusable interface (down, or gone) -- which is what it
+    // is here to catch, and which the caller turns into a restart.
     struct can_frame testFrame {};
     testFrame.can_id = CAN_EFF_FLAG;
     testFrame.len = 0;
-    if (::write(socket_, &testFrame, sizeof(testFrame)) != sizeof(testFrame)) {
+    if (::send(socket_, &testFrame, sizeof(testFrame), MSG_DONTWAIT) != static_cast<ssize_t>(sizeof(testFrame))) {
         ::close(socket_);
         throw std::runtime_error("CubeMars: CAN test write failed on '" + canInterface + "'");
     }
@@ -77,7 +80,24 @@ bool CubeMars::canWrite(uint32_t id, const uint8_t *data, uint8_t len) {
     frame.can_id = id | CAN_EFF_FLAG;
     frame.len = len;
     if (data && len > 0) std::memcpy(frame.data, data, len);
-    return ::write(socket_, &frame, sizeof(frame)) == sizeof(frame);
+
+    // MSG_DONTWAIT -- never a blocking write.
+    //
+    // CAN requires another node to ACK. With nothing else powered on the bus the
+    // controller retries every frame indefinitely, the socket's transmit queue
+    // fills, and a blocking write then parks the caller in the kernel forever.
+    // Because this is called from the same timer callback that reads feedback and
+    // publishes state, that stalls the ENTIRE node: no feedback, no topic, no
+    // error -- it just goes quiet while looking alive. (Observed on the NUC: the
+    // process sat in sock_alloc_send_pskb at 1.5% CPU publishing nothing.)
+    //
+    // Dropping the frame is strictly better than blocking: the next cycle
+    // produces a fresher command anyway, so a stale one is worth nothing.
+    if (::send(socket_, &frame, sizeof(frame), MSG_DONTWAIT) != static_cast<ssize_t>(sizeof(frame))) {
+        ++txDropped_;
+        return false;
+    }
+    return true;
 }
 
 bool CubeMars::canReadNonBlocking(uint32_t &id, uint8_t *data, uint8_t &len) {

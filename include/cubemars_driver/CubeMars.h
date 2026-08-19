@@ -46,6 +46,14 @@ public:
     [[nodiscard]] size_t motorCount() const { return motors_.size(); }
     [[nodiscard]] const CubeMarsCommon::MotorConfig &motorConfig(size_t motorIndex) const { return motors_[motorIndex]->config; }
 
+    /// Frames that could not be handed to the kernel and were dropped.
+    ///
+    /// Grows when the transmit queue stops draining -- almost always because
+    /// nothing else on the bus is powered, so no node ACKs and the controller
+    /// retries until the queue backs up. Monotonic; poll it to detect the
+    /// condition. Zero on a healthy bus.
+    [[nodiscard]] uint64_t txDropped() const { return txDropped_; }
+
 private:
     struct MotorRuntime {
         CubeMarsCommon::MotorConfig config;
@@ -72,6 +80,7 @@ private:
     bool canReadNonBlocking(uint32_t &id, uint8_t *data, uint8_t &len);
 
     int socket_ = -1;
+    uint64_t txDropped_ = 0;
     std::vector<std::unique_ptr<MotorRuntime>> motors_;
 };
 
