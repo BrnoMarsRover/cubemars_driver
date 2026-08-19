@@ -21,8 +21,9 @@ Options:
   --duration SEC        how long to sample the bus (default 1.5)
   --yes                 do not ask before writing
 
-Positions are wrapped to [-pi, pi). Actuators with a single-turn output encoder
-lose their reference on power cycle, so expect to re-run this after one.
+Offsets are captured exactly as the driver reads them, unwrapped. Actuators with
+a single-turn output encoder lose their reference on power cycle, so expect to
+re-run this after one.
 """
 
 import argparse, math, os, re, struct, subprocess, sys, time
@@ -33,10 +34,6 @@ except ImportError:
     sys.exit("PyYAML is required (it ships with ROS 2). Try: pip3 install pyyaml")
 
 STATUS_PREFIX = 0x29  # CubeMars servo-mode status frames are 0x2900 | can_id
-
-
-def wrap_pi(x):
-    return ((x + math.pi) % (2 * math.pi)) - math.pi
 
 
 def load_config(path):
@@ -81,7 +78,13 @@ def capture(iface, joints, duration):
         if can_id not in latest:
             missing.append((name, can_id))
             continue
-        raw_rad = wrap_pi(latest[can_id] * 0.1 * math.pi / 180.0)
+        # NOT wrapped to [-pi, pi). The driver does not wrap either -- it computes
+        # position = raw * positionScale - enc_off straight from the int16 field,
+        # which spans +-3276.7 deg. Wrapping here but not there puts the two out of
+        # step by a whole turn for any joint sitting outside +-180 deg: it produced
+        # exactly 2*pi on a joint whose true reading was +263.7 deg. The captured
+        # offset must mirror the driver's arithmetic exactly.
+        raw_rad = latest[can_id] * 0.1 * math.pi / 180.0
         offsets[name] = raw_rad
         print(f"  {name:8s} CAN {can_id:<4d} dir {direction:+.0f}   "
               f"{raw_rad:+.4f} rad ({math.degrees(raw_rad):+7.2f} deg)")
