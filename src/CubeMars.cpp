@@ -196,13 +196,19 @@ void CubeMars::updateCommands(double dt) {
             }
             if (limited) {
                 const auto &cfg = motor->config;
-                if (target > 0.0 && posNow >= cfg.maxPosition) target = 0.0;
-                else if (target < 0.0 && posNow <= cfg.minPosition) target = 0.0;
-                else if (cfg.maxAcceleration > 0.0 && target != 0.0) {
-                    const double room = target > 0.0 ? cfg.maxPosition - posNow : posNow - cfg.minPosition;
+                // Compare in ROS space. `target` is motor space (setVelocity already
+                // applied direction) while the limits and posNow are ROS space, so on
+                // a direction=-1 joint an unconverted test blocks the wrong end and
+                // strands the joint outside its own range.
+                double vRos = target * cfg.direction;
+                if (vRos > 0.0 && posNow >= cfg.maxPosition) vRos = 0.0;
+                else if (vRos < 0.0 && posNow <= cfg.minPosition) vRos = 0.0;
+                else if (cfg.maxAcceleration > 0.0 && vRos != 0.0) {
+                    const double room = vRos > 0.0 ? cfg.maxPosition - posNow : posNow - cfg.minPosition;
                     const double vCap = std::sqrt(2.0 * cfg.maxAcceleration * std::max(room, 0.0));
-                    target = std::clamp(target, -vCap, vCap);
+                    vRos = std::clamp(vRos, -vCap, vCap);
                 }
+                target = vRos * cfg.direction;
                 motor->rampedVelocity = target;
             }
             auto speed = static_cast<int32_t>(target * motor->erpmConversion);
@@ -217,8 +223,12 @@ void CubeMars::updateCommands(double dt) {
         case CubeMarsCommon::ControlMode::Current: {
             double effort = motor->targetEffort;
             if (limited) {
-                if (effort > 0.0 && posNow >= motor->config.maxPosition) effort = 0.0;
-                else if (effort < 0.0 && posNow <= motor->config.minPosition) effort = 0.0;
+                // Same frame correction as the velocity case above.
+                const double dir = motor->config.direction;
+                double eRos = effort * dir;
+                if (eRos > 0.0 && posNow >= motor->config.maxPosition) eRos = 0.0;
+                else if (eRos < 0.0 && posNow <= motor->config.minPosition) eRos = 0.0;
+                effort = eRos * dir;
             }
             auto current = static_cast<int32_t>(effort * 1000.0 / motor->config.kt);
             if (std::abs(current) >= 60000) break;
@@ -231,7 +241,11 @@ void CubeMars::updateCommands(double dt) {
         }
         case CubeMarsCommon::ControlMode::Position: {
             double wanted = motor->targetPosition;
-            if (limited) wanted = std::clamp(wanted, motor->config.minPosition, motor->config.maxPosition);
+            if (limited) {
+                // targetPosition is motor space; clamp in ROS space and convert back.
+                const double dir = motor->config.direction;
+                wanted = std::clamp(wanted * dir, motor->config.minPosition, motor->config.maxPosition) * dir;
+            }
             auto position =
                 static_cast<int32_t>((wanted + motor->config.encoderOffset) / motor->positionScale *
                                      10000.0 * 180.0 / M_PI);
@@ -245,7 +259,11 @@ void CubeMars::updateCommands(double dt) {
         }
         case CubeMarsCommon::ControlMode::PositionSpeed: {
             double wanted = motor->targetPosition;
-            if (limited) wanted = std::clamp(wanted, motor->config.minPosition, motor->config.maxPosition);
+            if (limited) {
+                // targetPosition is motor space; clamp in ROS space and convert back.
+                const double dir = motor->config.direction;
+                wanted = std::clamp(wanted * dir, motor->config.minPosition, motor->config.maxPosition) * dir;
+            }
             auto position =
                 static_cast<int32_t>((wanted + motor->config.encoderOffset) / motor->positionScale *
                                      10000.0 * 180.0 / M_PI);
