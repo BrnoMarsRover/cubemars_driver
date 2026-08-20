@@ -31,6 +31,8 @@ static constexpr auto maxAcceleration = "max_acceleration";
 static constexpr auto readOnly = "read_only";
 static constexpr auto positionFeedback = "position_feedback";
 static constexpr auto direction = "direction";
+static constexpr auto minPosition = "min_position";
+static constexpr auto maxPosition = "max_position";
 }// namespace CubeMarsNodeParameters
 
 class CubeMarsNode : public rclcpp::Node {

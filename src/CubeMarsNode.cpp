@@ -42,6 +42,8 @@ void CubeMarsNode::onInitialize() {
         declare_parameter<bool>(name + "." + readOnly, false);
         declare_parameter<std::string>(name + "." + positionFeedback, "output");
         declare_parameter<double>(name + "." + direction, 1.0);
+        declare_parameter<double>(name + "." + minPosition, 0.0);
+        declare_parameter<double>(name + "." + maxPosition, 0.0);
 
         CubeMarsCommon::MotorConfig cfg;
         cfg.name = name;
@@ -59,9 +61,21 @@ void CubeMarsNode::onInitialize() {
                 get_parameter(name + "." + positionFeedback).as_string());
         cfg.direction = CubeMarsCommon::validateDirection(
                 get_parameter(name + "." + direction).as_double(), name);
+        cfg.minPosition = get_parameter(name + "." + minPosition).as_double();
+        cfg.maxPosition = get_parameter(name + "." + maxPosition).as_double();
 
         auto modeStr = get_parameter(name + "." + controlMode).as_string();
         cfg.controlMode = CubeMarsCommon::controlModeFromString(modeStr);
+
+        if (cfg.maxPosition != 0.0 || cfg.minPosition != 0.0) {
+            if (cfg.maxPosition <= cfg.minPosition) {
+                throw std::runtime_error("CubeMars joint '" + name + "': max_position (" +
+                                         std::to_string(cfg.maxPosition) + ") must exceed min_position (" +
+                                         std::to_string(cfg.minPosition) + ")");
+            }
+            RCLCPP_INFO(get_logger(), "Joint '%s': soft limits [%.4f, %.4f] rad", name.c_str(),
+                        cfg.minPosition, cfg.maxPosition);
+        }
 
         motorConfigs.push_back(cfg);
         RCLCPP_INFO(get_logger(),

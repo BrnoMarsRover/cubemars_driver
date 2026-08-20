@@ -170,6 +170,21 @@ void CubeMars::updateCommands(double dt) {
         auto mode = motor->config.controlMode;
         uint8_t data[8] = {};
 
+        // Soft travel limits, applied to the TARGET before it is encoded. Position
+        // targets are clamped into range; velocity and current targets are refused
+        // when they would drive further past a limit already reached.
+        //
+        // For velocity we also cap the speed to what can still be braked inside the
+        // remaining travel (v <= sqrt(2*a*d)). Without that the joint stops only
+        // once the limit is crossed and then coasts past it while the acceleration
+        // ramp brings it down -- a limit you overshoot is not a limit.
+        double posNow = 0.0;
+        const bool limited = CubeMarsCommon::hasPositionLimits(motor->config);
+        if (limited) {
+            const std::lock_guard<std::mutex> lock(motor->stateMutex);
+            posNow = motor->state.position;
+        }
+
         switch (mode) {
         case CubeMarsCommon::ControlMode::Speed: {
             double target = motor->targetVelocity;
@@ -178,6 +193,17 @@ void CubeMars::updateCommands(double dt) {
                 double diff = target - motor->rampedVelocity;
                 motor->rampedVelocity += std::clamp(diff, -maxDelta, maxDelta);
                 target = motor->rampedVelocity;
+            }
+            if (limited) {
+                const auto &cfg = motor->config;
+                if (target > 0.0 && posNow >= cfg.maxPosition) target = 0.0;
+                else if (target < 0.0 && posNow <= cfg.minPosition) target = 0.0;
+                else if (cfg.maxAcceleration > 0.0 && target != 0.0) {
+                    const double room = target > 0.0 ? cfg.maxPosition - posNow : posNow - cfg.minPosition;
+                    const double vCap = std::sqrt(2.0 * cfg.maxAcceleration * std::max(room, 0.0));
+                    target = std::clamp(target, -vCap, vCap);
+                }
+                motor->rampedVelocity = target;
             }
             auto speed = static_cast<int32_t>(target * motor->erpmConversion);
             if (std::abs(speed) >= 100000) break;
@@ -189,7 +215,12 @@ void CubeMars::updateCommands(double dt) {
             break;
         }
         case CubeMarsCommon::ControlMode::Current: {
-            auto current = static_cast<int32_t>(motor->targetEffort * 1000.0 / motor->config.kt);
+            double effort = motor->targetEffort;
+            if (limited) {
+                if (effort > 0.0 && posNow >= motor->config.maxPosition) effort = 0.0;
+                else if (effort < 0.0 && posNow <= motor->config.minPosition) effort = 0.0;
+            }
+            auto current = static_cast<int32_t>(effort * 1000.0 / motor->config.kt);
             if (std::abs(current) >= 60000) break;
             data[0] = current >> 24;
             data[1] = current >> 16;
@@ -199,8 +230,10 @@ void CubeMars::updateCommands(double dt) {
             break;
         }
         case CubeMarsCommon::ControlMode::Position: {
+            double wanted = motor->targetPosition;
+            if (limited) wanted = std::clamp(wanted, motor->config.minPosition, motor->config.maxPosition);
             auto position =
-                static_cast<int32_t>((motor->targetPosition + motor->config.encoderOffset) / motor->positionScale *
+                static_cast<int32_t>((wanted + motor->config.encoderOffset) / motor->positionScale *
                                      10000.0 * 180.0 / M_PI);
             if (std::abs(position) >= 360000000) break;
             data[0] = position >> 24;
@@ -211,8 +244,10 @@ void CubeMars::updateCommands(double dt) {
             break;
         }
         case CubeMarsCommon::ControlMode::PositionSpeed: {
+            double wanted = motor->targetPosition;
+            if (limited) wanted = std::clamp(wanted, motor->config.minPosition, motor->config.maxPosition);
             auto position =
-                static_cast<int32_t>((motor->targetPosition + motor->config.encoderOffset) / motor->positionScale *
+                static_cast<int32_t>((wanted + motor->config.encoderOffset) / motor->positionScale *
                                      10000.0 * 180.0 / M_PI);
             if (std::abs(position) >= 360000000) break;
             data[0] = position >> 24;

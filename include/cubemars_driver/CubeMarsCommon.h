@@ -104,6 +104,12 @@ struct MotorConfig {
     int16_t posVelLimit = 0;
     int16_t posAccLimit = 0;
     bool readOnly = false;
+    /// Soft travel limits in rad, in the SAME frame as the reported position
+    /// (i.e. after enc_off and direction). Disabled when maxPosition <= minPosition,
+    /// which is the default, so a config that sets neither behaves exactly as before.
+    double minPosition = 0.0;
+    double maxPosition = 0.0;
+
     /// Sign of this joint's axis relative to the motor's own. +1 or -1 only.
     /// Applied symmetrically to feedback and to commands, so flipping it
     /// reverses the joint as seen by ROS without touching the motor wiring.
@@ -111,6 +117,10 @@ struct MotorConfig {
     ControlMode controlMode = ControlMode::Speed;
     PositionFeedback positionFeedback = PositionFeedback::Output;
 };
+
+inline bool hasPositionLimits(const MotorConfig &cfg) {
+    return cfg.maxPosition > cfg.minPosition;
+}
 
 struct MotorState {
     double position = 0.0;    // rad (output shaft)
