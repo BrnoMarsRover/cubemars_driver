@@ -51,7 +51,14 @@ def load_config(path):
             j = params.get(name, {})
             if "can_id" not in j:
                 sys.exit(f"config: joint '{name}' has no can_id")
-            joints[name] = (int(j["can_id"]), float(j.get("direction", 1.0)))
+            # positionScale mirrors the driver: an actuator measuring at the ROTOR
+            # reports pre-reduction angles, so the reading must be divided by the
+            # gear ratio to become an output-shaft angle. Without this the captured
+            # offset for such a joint is off by the whole ratio -- it recorded
+            # 11.8124 for a joint whose true zero was 1.1404 (gear 10).
+            gear = float(j.get("gear_ratio", 1) or 1)
+            scale = 1.0 / gear if str(j.get("position_feedback", "output")).lower() == "rotor" else 1.0
+            joints[name] = (int(j["can_id"]), float(j.get("direction", 1.0)), scale)
         if joints:
             return iface, joints
     sys.exit(f"config: no joints found in {path}")
@@ -74,7 +81,7 @@ def capture(iface, joints, duration):
         latest[full & 0xFF] = raw
 
     offsets, missing = {}, []
-    for name, (can_id, direction) in joints.items():
+    for name, (can_id, direction, scale) in joints.items():
         if can_id not in latest:
             missing.append((name, can_id))
             continue
@@ -84,10 +91,11 @@ def capture(iface, joints, duration):
         # step by a whole turn for any joint sitting outside +-180 deg: it produced
         # exactly 2*pi on a joint whose true reading was +263.7 deg. The captured
         # offset must mirror the driver's arithmetic exactly.
-        raw_rad = latest[can_id] * 0.1 * math.pi / 180.0
+        raw_rad = latest[can_id] * 0.1 * math.pi / 180.0 * scale
         offsets[name] = raw_rad
         print(f"  {name:8s} CAN {can_id:<4d} dir {direction:+.0f}   "
-              f"{raw_rad:+.4f} rad ({math.degrees(raw_rad):+7.2f} deg)")
+              f"{raw_rad:+.4f} rad ({math.degrees(raw_rad):+7.2f} deg)"
+              f"{'  [rotor /%g]' % (1.0 / scale) if scale != 1.0 else ''}")
     if missing:
         print()
         for name, can_id in missing:
