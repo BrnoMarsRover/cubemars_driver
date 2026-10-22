@@ -1,0 +1,49 @@
+# Build + tests on every supported ROS distribution, after every push and for pull requests to main.
+# Same file in every BMR repository.
+name: CI
+
+on:
+  push:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { ros: humble, image: "ros:humble-ros-base-jammy" }
+          - { ros: jazzy,  image: "ros:jazzy-ros-base-noble" }
+    name: ${{ matrix.ros }}
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: src/${{ github.event.repository.name }}
+
+      # -r: other BMR packages (exec_depend) are not in this checkout
+      - name: Dependencies
+        run: |
+          apt-get update
+          rosdep update --rosdistro ${{ matrix.ros }}
+          rosdep install -y -r --rosdistro ${{ matrix.ros }} --ignore-src --from-paths src
+
+      - name: Build
+        run: |
+          source /opt/ros/${{ matrix.ros }}/setup.bash
+          colcon build --event-handlers console_cohesion+
+
+      - name: Test
+        run: |
+          source /opt/ros/${{ matrix.ros }}/setup.bash
+          colcon test --event-handlers console_cohesion+
+          colcon test-result --verbose

@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
 """Set the zero reference (enc_off) for CubeMars joints, from the live bus.
 
-Reads the joints, CAN ids and interface straight out of a cubemars_driver config
-file, captures where each motor currently is, and writes that back as enc_off --
-so the pose the arm is in when you run this becomes 0.000 rad.
+Reads the joints, CAN ids and interface of one CubeMarsSystem out of a robot's
+hardware config (models/ugvs/<robot>/hardware.yaml, ros2_control: <system>),
+captures where each motor currently is, and writes that back as enc_off -- so
+the pose the joints are in when you run this becomes 0.000 rad.
 
 The driver computes:      position = (raw * positionScale - enc_off) * direction
 so enc_off is the RAW angle at your chosen zero, before direction is applied.
 That is what this captures, which is why it works for both a joint with
 direction +1 and one with -1.
 
-  ./calibrate_zero.py --config <path/to/config.yaml> [options]
+  ./calibrate_zero.py --config <hardware.yaml> --system <name> [options]
+  e.g. --config models/ugvs/freya/hardware.yaml --system steering --service bmr_chassis
 
 Options:
   --install-copy PATH   also write the installed copy (colcon copies configs, so
                         editing only the source has no effect until a rebuild)
   --service NAME        stop this systemd unit before capturing and start it
-                        afterwards. Use it when the driver is actively holding
-                        the joints -- a damped joint cannot be positioned by hand.
+                        afterwards. Use it when the motors are held (the
+                        controller manager runs) -- a damped joint cannot be
+                        positioned by hand.
   --duration SEC        how long to sample the bus (default 1.5)
   --yes                 do not ask before writing
 
@@ -26,7 +29,7 @@ a single-turn output encoder lose their reference on power cycle, so expect to
 re-run this after one.
 """
 
-import argparse, math, os, re, struct, subprocess, sys, time
+import argparse, math, os, re, struct, subprocess, sys
 
 try:
     import yaml
@@ -36,32 +39,29 @@ except ImportError:
 STATUS_PREFIX = 0x29  # CubeMars servo-mode status frames are 0x2900 | can_id
 
 
-def load_config(path):
-    """Pull interface + {joint: (can_id, direction)} out of a driver config."""
+def load_config(path, system):
+    """Pull interface + {joint: (can_id, direction, scale)} out of a hardware config."""
     with open(path) as f:
         doc = yaml.safe_load(f)
-    # The node key is normally the '/**:' wildcard, but accept any single root.
-    for root in doc.values():
-        params = root.get("ros__parameters")
-        if not params:
-            continue
-        iface = params.get("can_interface", "can0")
-        joints = {}
-        for name in params.get("joints", []):
-            j = params.get(name, {})
-            if "can_id" not in j:
-                sys.exit(f"config: joint '{name}' has no can_id")
-            # positionScale mirrors the driver: an actuator measuring at the ROTOR
-            # reports pre-reduction angles, so the reading must be divided by the
-            # gear ratio to become an output-shaft angle. Without this the captured
-            # offset for such a joint is off by the whole ratio -- it recorded
-            # 11.8124 for a joint whose true zero was 1.1404 (gear 10).
-            gear = float(j.get("gear_ratio", 1) or 1)
-            scale = 1.0 / gear if str(j.get("position_feedback", "output")).lower() == "rotor" else 1.0
-            joints[name] = (int(j["can_id"]), float(j.get("direction", 1.0)), scale)
-        if joints:
-            return iface, joints
-    sys.exit(f"config: no joints found in {path}")
+    entry = (doc.get("ros2_control") or {}).get(system)
+    if not entry:
+        sys.exit(f"config: no ros2_control system '{system}' in {path}")
+    iface = entry.get("params", {}).get("can_interface", "can0")
+    joints = {}
+    for name, j in (entry.get("joints") or {}).items():
+        if "can_id" not in j:
+            sys.exit(f"config: joint '{name}' has no can_id")
+        # positionScale mirrors the driver: an actuator measuring at the ROTOR
+        # reports pre-reduction angles, so the reading must be divided by the
+        # gear ratio to become an output-shaft angle. Without this the captured
+        # offset for such a joint is off by the whole ratio -- it recorded
+        # 11.8124 for a joint whose true zero was 1.1404 (gear 10).
+        gear = float(j.get("gear_ratio", 1) or 1)
+        scale = 1.0 / gear if str(j.get("position_feedback", "output")).lower() == "rotor" else 1.0
+        joints[name] = (int(j["can_id"]), float(j.get("direction", 1.0)), scale)
+    if not joints:
+        sys.exit(f"config: no joints in system '{system}' of {path}")
+    return iface, joints
 
 
 def capture(iface, joints, duration):
@@ -180,13 +180,14 @@ def systemctl(action, unit):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
+    ap.add_argument("--system", required=True)
     ap.add_argument("--install-copy")
     ap.add_argument("--service")
     ap.add_argument("--duration", type=float, default=1.5)
     ap.add_argument("--yes", action="store_true")
     a = ap.parse_args()
 
-    iface, joints = load_config(a.config)
+    iface, joints = load_config(a.config, a.system)
     print(f"=== CubeMars zero calibration ===\n")
     print(f"config    : {a.config}")
     print(f"interface : {iface}")
@@ -196,11 +197,6 @@ def main():
     try:
         if a.service:
             systemctl("stop", a.service)
-            for _ in range(20):
-                if subprocess.run(["pgrep", "-f", "cubemars_node"],
-                                  capture_output=True).returncode != 0:
-                    break
-                time.sleep(0.5)
             stopped = True
             print("  driver stopped, joints are free\n")
 
@@ -222,7 +218,7 @@ def main():
         if stopped:
             print()
             systemctl("start", a.service)
-            print("\nDone. The state topic should now read ~0 for every joint.")
+            print("\nDone. joint_states should now read ~0 for every joint.")
 
 
 if __name__ == "__main__":

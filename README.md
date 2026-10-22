@@ -1,146 +1,70 @@
 # cubemars_driver
 
-ROS 2 driver for **CubeMars AK series** actuators on **SocketCAN**, using the
-CubeMars *servo mode* protocol (extended 29-bit CAN frames).
+**CubeMars AK series** actuators on **SocketCAN** (servo mode, extended 29-bit
+CAN frames) as a ros2_control hardware plugin, `cubemars_driver/CubeMarsSystem`:
+one system per CAN bus, any number of motors on it. On Freya it drives the
+steering (`canturn`); the arm (`canarm`) follows.
 
-Any number of motors on one CAN bus are driven from a single node. Each motor is
-exposed as a named joint, commanded and reported through `sensor_msgs/JointState`.
-
-## Features
-
-- Four control modes per joint: **current**, **velocity**, **position**, **position+speed**
-- Per-joint acceleration ramping, torque limit and encoder offset
-- **Command timeout watchdog** — motors are stopped if commands stop arriving
-- Fault decoding (over-temperature, over-current, over/under-voltage, encoder, stall)
-- `read_only` joints, for motors driven by something else that you only want to observe
-- Protocol layer (`libcubemars`) is plain C++ with no ROS dependency, so it can be
-  reused from a test harness or a non-ROS program
-
-## Build
-
-```bash
-cd ~/asgard/workspace
-colcon build --packages-select cubemars_driver
-source install/setup.bash
+```
+controller (chassis_controller, ...) ──► CubeMarsSystem ──► libcubemars ──► CAN ──► motors
+                                          position / velocity commands, position and velocity states
 ```
 
-## Bring up the CAN interface
+- The protocol layer (`libcubemars`) is plain C++ without ROS.
+- Fault decoding (over-temperature, over-current, over/under-voltage, encoder, stall), logged.
+- Per-joint acceleration ramp, encoder offset, direction, soft position limits.
+- `tools/calibrate_zero.py`: the zero reference (`enc_off`) from the live bus.
 
-The driver does **not** configure the bus; do it before launching. CubeMars ships
-at 1 Mbit:
+## Usage
+
+The plugin is configured in the robot's URDF, which models generates from the
+robot's hardware config (`models/ugvs/<robot>/hardware.yaml`, section
+`ros2_control`); the controller manager of the subsystem loads it (see
+[chassis](https://github.com/BrnoMarsRover/chassis#readme)):
+
+```yaml
+ros2_control:
+  steering:
+    plugin: cubemars_driver/CubeMarsSystem
+    params: {can_interface: canturn, position_kp: 1.6, position_ki: 0.1}
+    joints:
+      wheel_base_front_l: {can_id: 104, kt: 0.199, pole_pairs: 21, gear_ratio: 8, enc_off: -2.342, direction: -1.0}
+```
+
+The CAN bus has to be up at 1 Mbit before the controller manager starts; on the
+robot systemd-networkd brings it up (bmr_system, `robots/<robot>/`). Check that
+the motors talk:
 
 ```bash
-sudo ip link set can0 down
-sudo ip link set can0 up type can bitrate 1000000 listen-only off loopback off
+candump -ta canturn      # 0x29XX status frames, one per motor and command
 ```
 
 > [!WARNING]
-> `ip link set ... up type can bitrate ...` does **not** clear control-mode flags
-> left over from a previous session. If `listen-only` is still set the driver will
-> open the socket, transmit nothing, receive nothing, and report no error. Always
-> pass `listen-only off` explicitly. Check with `ip -details link show can0` —
-> the output must not contain `LISTEN-ONLY`.
+> Set a bus up by hand with `listen-only off` (`ip link set canturn up type can
+> bitrate 1000000 listen-only off`): a flag left from an earlier session stays,
+> and the driver then sends and receives nothing without an error.
 
-Verify motors are talking before you launch anything:
+## CubeMarsSystem
 
-```bash
-candump -ta can0        # expect 0x29XX status frames, one burst per motor
-```
+| Joint command interface | |
+|---|---|
+| `velocity` | passed to the motor [rad/s at the output] |
+| `position` | a PI loop in the plugin turns the position error into a velocity (`position_kp`, `position_ki`, integral limited to 1 rad s); the motors always run in velocity mode |
 
-## Run
-
-```bash
-ros2 launch cubemars_driver cubemars.launch.py \
-    robot_name:=freya robot_number:=1 \
-    config:=$(ros2 pkg prefix --share my_pkg)/config/my_motors.yaml
-```
-
-> [!IMPORTANT]
-> This package ships **no robot-specific config**. Which motors exist, their CAN
-> ids, gearing and direction belong to the package that owns the hardware — the
-> driver is agnostic of what it is driving. [`config/example.yaml`](config/example.yaml)
-> documents every parameter; copy it into your own package and edit it there.
-
-Equally, most integrations do not use this launch file at all — they declare the
-`Node` directly in their own bringup so they can set the namespace and remappings
-to suit. Both consumers on Freya do exactly that.
-
-### Launch arguments
-
-| Argument       | Default            | Description                                        |
-| -------------- | ------------------ | -------------------------------------------------- |
-| `use_sim_time` | `False`            | Use simulation clock if true.                      |
-| `robot_name`   | —                  | Robot name (`freya`), used to build the namespace. |
-| `robot_number` | `''`               | Appended to the robot name (`freya_1`).            |
-| `config`       | — (required)       | **Absolute path** to the parameter file.           |
-| `state`        | `~/state`          | Output `JointState` topic.                         |
-| `command`      | `~/command`        | Input `JointState` topic.                          |
-
-### Topics
-
-| Topic       | Type                       | Direction | Notes |
-| ----------- | -------------------------- | --------- | ----- |
-| `~/state`   | `sensor_msgs/JointState`   | published | Measured position, velocity, effort per joint, at `update_rate`. |
-| `~/command` | `sensor_msgs/JointState`   | subscribed| Field read depends on each joint's `control_mode`. |
-
-Which field of the command message is used depends on the joint's `control_mode`:
-`velocity` reads `velocity[]`, `position`/`position_speed` read `position[]`, and
-`current` reads `effort[]`. Joints are matched **by name**, so a command message may
-address any subset of the configured joints, in any order.
-
-> [!IMPORTANT]
-> Commands must keep arriving. If nothing is received for `command_timeout_ms`
-> the node sends a zero-speed command to every joint and logs a warning. This is
-> a safety feature — publish continuously, not once.
-
-## ros2_control: CubeMarsSystem
-
-`cubemars_driver/CubeMarsSystem` drives the same motors as a ros2_control
-hardware plugin: one system per CAN bus, configured in the robot's URDF. On
-Freya it is the steering (`canturn`), from `models/ugvs/freya/hardware.yaml`.
-
-```xml
-<ros2_control name="freya_1_steering" type="system">
-  <hardware>
-    <plugin>cubemars_driver/CubeMarsSystem</plugin>
-    <param name="can_interface">canturn</param>
-    <param name="position_kp">1.6</param>
-    <param name="position_ki">0.1</param>
-  </hardware>
-  <joint name="freya_1_wheel_base_front_l_joint">
-    <command_interface name="position"/>
-    <state_interface name="position"/>
-    <state_interface name="velocity"/>
-    <param name="can_id">104</param>
-    <param name="kt">0.199</param>
-    ...
-  </joint>
-</ros2_control>
-```
-
-- The motors always run in velocity mode. A joint with a `velocity` command
-  passes it through; a joint with a `position` command gets a PI loop in the
-  plugin (`position_kp` [1/s], `position_ki` [1/s²], integral limited to 1 rad s).
-- Joint parameters are those of the node: `can_id`, `kt`, `pole_pairs`,
-  `gear_ratio` (required), `enc_off`, `direction`, `max_acceleration`,
-  `position_feedback`, `min_position`, `max_position`.
-- States: position and velocity at the output shaft. On activation a position
-  joint's target is its current position, so it does not jump.
-- Deactivation sends zero speed to every motor. The command timeout is the
-  controller's (e.g. `chassis_controller`).
+States: `position` and `velocity` at the output shaft. On activation a position
+joint's target is where it is, so it does not jump; deactivation sends zero
+speed to every motor. The command timeout is the controller's.
 
 ## Parameters
 
-Global:
+Hardware (`<hardware><param>`):
 
-| Parameter            | Type     | Default  | Description |
-| -------------------- | -------- | -------- | ----------- |
-| `can_interface`      | string   | `can0`   | SocketCAN interface name. |
-| `update_rate`        | double   | `100.0`  | Hz. Feedback read, command send and state publish rate. |
-| `command_timeout_ms` | double   | `100.0`  | Stop motors if no command arrives within this window. |
-| `joints`             | string[] | `[]`     | Joint names. Each needs its own parameter block. Required. |
+| Parameter | Default | |
+|---|---|---|
+| `can_interface` | - | SocketCAN interface, required |
+| `position_kp`, `position_ki` | `1.6`, `0.1` | [1/s], [1/s²] the loop of position joints |
 
-Per joint (nested under the joint name):
+Joint (`<joint><param>`):
 
 | Parameter          | Type   | Default    | Description |
 | ------------------ | ------ | ---------- | ----------- |
@@ -148,13 +72,9 @@ Per joint (nested under the joint name):
 | `kt`               | double | —          | Torque constant, Nm/A. Required. |
 | `pole_pairs`       | int    | —          | Motor pole pairs, for the ERPM conversion. Required. |
 | `gear_ratio`       | int    | —          | External gear reduction. Required. |
-| `control_mode`     | string | `velocity` | `current`, `velocity` (alias `speed`), `position`, `position_speed`. |
 | `enc_off`          | double | `0.0`      | Encoder offset in rad, subtracted from reported position. |
-| `pos_vel_limit`    | int    | `0`        | Speed limit used in `position_speed` mode. |
-| `pos_acc_limit`    | int    | `0`        | Acceleration limit used in `position_speed` mode. |
-| `trq_limit`        | double | `0.0`      | Nm. Exceeding it stops all motors. `0` disables. |
 | `max_acceleration` | double | `0.0`      | rad/s², velocity ramp limit. `0` disables ramping. |
-| `read_only`        | bool   | `false`    | Never transmit to this motor, only decode its feedback. |
+| `min_position`, `max_position` | double | `0.0` | Soft travel limits in rad; off while `max <= min`. |
 | `position_feedback`| string | `output`   | Where position is measured: `output` or `rotor`. See below. |
 | `direction`        | double | `1.0`      | `+1.0` or `-1.0` only. Flips this joint's axis. See below. |
 
@@ -185,20 +105,20 @@ at startup rather than silently corrupting control.
 so you do not have to work it out by hand:
 
 ```bash
-./tools/calibrate_zero.py --config /path/to/config.yaml \
-    --install-copy /path/to/install/share/<pkg>/config.yaml \
-    --service my_bringup.service
+ros2 run cubemars_driver calibrate_zero.py \
+    --config <bmr_system>/workspace/src/bmr/models/ugvs/freya/hardware.yaml \
+    --system steering --service bmr_chassis
 ```
 
-It reads the interface, joints and CAN ids out of the config itself, so it works
-for any robot using this driver. Position the joints where zero should be, press
+It reads the interface, joints and CAN ids of the system out of the hardware
+config, so it works for any robot using this driver. Position the joints where zero should be, press
 Enter, and it writes `enc_off` for each — replacing the existing value or adding
 one if the config has never been calibrated. Comments and layout are preserved,
 and it refuses to write at all unless every configured joint reported.
 
-`--service` stops the given unit first: a joint the driver is actively holding
-cannot be positioned by hand. `--install-copy` matters because colcon *copies*
-configs, so editing only the source has no effect until the next build.
+`--service` stops the given unit first: a joint the controller manager is
+holding cannot be positioned by hand. `--install-copy` writes an installed copy
+too, for a workspace built without `--symlink-install`.
 
 > [!NOTE]
 > An actuator with a single-turn output encoder loses its reference across a
@@ -221,7 +141,7 @@ always in the same frame.
 
 Getting this wrong scales position by `gear_ratio` — a 10x or 39x error, not a
 subtle one. If you are unsure, rotate the joint by a known amount and check that
-`~/state` reports the same angle.
+`joint_states` reports the same angle.
 
 > [!NOTE]
 > Output-side encoders are typically **single-turn and lose their reference across
@@ -248,6 +168,8 @@ CubeMars servo mode, extended (29-bit) identifiers throughout.
 | `position`       | 4     | `0x04xx` | 1e-4 deg |
 | `set_origin`     | 5     | `0x05xx` | — |
 | `position_speed` | 6     | `0x06xx` | 1e-4 deg, then int16 speed and accel limits |
+
+The plugin uses `speed` only.
 
 **Status** — the motor replies on `0x2900 | can_id` (packet type 41):
 
@@ -279,6 +201,12 @@ is captured at engagement, so engaging against a moving joint makes the motor dr
 back to a stale pose. Bound the effort with a current limit, and damp to a stop
 before releasing rather than dropping straight to zero torque — a loaded joint
 released at zero torque will swing.
+
+## Development
+
+```
+bmr_build --packages-select cubemars_driver
+```
 
 ## License
 

@@ -20,7 +20,7 @@ namespace cubemars_driver {
     /// States: position and velocity at the output shaft.
     ///
     /// Hardware parameters: can_interface, position_kp, position_ki.
-    /// Joint parameters (as the cubemars_node config): can_id, kt, pole_pairs,
+    /// Joint parameters (hardware.yaml of the robot): can_id, kt, pole_pairs,
     /// gear_ratio, enc_off, direction, max_acceleration, position_feedback,
     /// min_position, max_position.
     class CubeMarsSystem : public hardware_interface::SystemInterface {
