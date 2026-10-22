@@ -19,6 +19,9 @@ endif ()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(hardware_interface REQUIRED)
+find_package(pluginlib REQUIRED)
+find_package(rclcpp_lifecycle REQUIRED)
 
 include_directories(include)
 
@@ -27,6 +30,8 @@ include_directories(include)
 # from a plain C++ program or a test harness.
 add_library(cubemars src/CubeMars.cpp)
 target_include_directories(cubemars PUBLIC include)
+# linked into the ros2_control plugin (a shared library) as well
+set_target_properties(cubemars PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # | ---------- add executable ----------
 add_executable(cubemars_node src/cubemars_node.cpp src/CubeMarsNode.cpp)
@@ -42,6 +47,16 @@ target_link_libraries(cubemars_node cubemars)
 
 install(TARGETS cubemars_node cubemars
         DESTINATION lib/${PROJECT_NAME})
+
+# | ---------- ros2_control: cubemars_driver/CubeMarsSystem ----------
+add_library(cubemars_ros2_control SHARED src/CubeMarsSystem.cpp)
+target_link_libraries(cubemars_ros2_control cubemars)
+ament_target_dependencies(cubemars_ros2_control hardware_interface pluginlib rclcpp rclcpp_lifecycle)
+pluginlib_export_plugin_description_file(hardware_interface cubemars_driver_plugins.xml)
+install(TARGETS cubemars_ros2_control
+        ARCHIVE DESTINATION lib
+        LIBRARY DESTINATION lib
+        RUNTIME DESTINATION bin)
 
 # Install
 install(

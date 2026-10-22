@@ -1,0 +1,7 @@
+<library path="cubemars_ros2_control">
+  <class name="cubemars_driver/CubeMarsSystem"
+         type="cubemars_driver::CubeMarsSystem"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>CubeMars AK actuators on one CAN bus as a ros2_control system (position joints closed with a PI loop).</description>
+  </class>
+</library>

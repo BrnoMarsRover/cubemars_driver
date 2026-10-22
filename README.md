@@ -93,6 +93,42 @@ address any subset of the configured joints, in any order.
 > the node sends a zero-speed command to every joint and logs a warning. This is
 > a safety feature — publish continuously, not once.
 
+## ros2_control: CubeMarsSystem
+
+`cubemars_driver/CubeMarsSystem` drives the same motors as a ros2_control
+hardware plugin: one system per CAN bus, configured in the robot's URDF. On
+Freya it is the steering (`canturn`), from `models/ugvs/freya/hardware.yaml`.
+
+```xml
+<ros2_control name="freya_1_steering" type="system">
+  <hardware>
+    <plugin>cubemars_driver/CubeMarsSystem</plugin>
+    <param name="can_interface">canturn</param>
+    <param name="position_kp">1.6</param>
+    <param name="position_ki">0.1</param>
+  </hardware>
+  <joint name="freya_1_wheel_base_front_l_joint">
+    <command_interface name="position"/>
+    <state_interface name="position"/>
+    <state_interface name="velocity"/>
+    <param name="can_id">104</param>
+    <param name="kt">0.199</param>
+    ...
+  </joint>
+</ros2_control>
+```
+
+- The motors always run in velocity mode. A joint with a `velocity` command
+  passes it through; a joint with a `position` command gets a PI loop in the
+  plugin (`position_kp` [1/s], `position_ki` [1/s²], integral limited to 1 rad s).
+- Joint parameters are those of the node: `can_id`, `kt`, `pole_pairs`,
+  `gear_ratio` (required), `enc_off`, `direction`, `max_acceleration`,
+  `position_feedback`, `min_position`, `max_position`.
+- States: position and velocity at the output shaft. On activation a position
+  joint's target is its current position, so it does not jump.
+- Deactivation sends zero speed to every motor. The command timeout is the
+  controller's (e.g. `chassis_controller`).
+
 ## Parameters
 
 Global:
