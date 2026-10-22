@@ -202,6 +202,11 @@ back to a stale pose. Bound the effort with a current limit, and damp to a stop
 before releasing rather than dropping straight to zero torque — a loaded joint
 released at zero torque will swing.
 
+## Authors
+
+Standa Svědiroh wrote the driver and the protocol layer (`libcubemars`); Milos
+Cihlar moved it to ros2_control (`CubeMarsSystem`).
+
 ## Development
 
 ```
